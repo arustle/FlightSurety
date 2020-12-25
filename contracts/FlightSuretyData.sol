@@ -1,4 +1,5 @@
 pragma solidity ^0.6.2;
+// SPDX-License-Identifier: UNLICENSED
 
 import "../node_modules/openzeppelin-solidity/contracts/math/SafeMath.sol";
 
@@ -101,10 +102,13 @@ contract FlightSuretyData {
    */
   function registerAirline
   (
+    address newAirline
   )
   external
-  pure
   {
+    require(newAirline != address(0));
+    require(!(_airlines[newAirline] == true), "Airline is already registered!");
+    _airlines[newAirline] = true;
   }
 
 
@@ -175,7 +179,14 @@ contract FlightSuretyData {
   * @dev Fallback function for funding smart contract.
   *
   */
-  function()
+  fallback()
+  external
+  payable
+  {
+    //    fund();
+  }
+
+  receive()
   external
   payable
   {
@@ -183,5 +194,19 @@ contract FlightSuretyData {
   }
 
 
+  // -------------------------------------------------
+
+  mapping(address => bool) private _airlines;
+  mapping(address => bool) private _authorizedAddresses;
+
+  function authorizeCaller(address newAddress) public requireContractOwner {
+    require(newAddress != address(0));
+    require(!(_authorizedAddresses[newAddress] == true), "Address is already authorized!");
+    _authorizedAddresses[newAddress] = true;
+  }
+
+  function isAirline(address airline) public view returns (bool) {
+    return _airlines[airline] == true;
+  }
 }
 
