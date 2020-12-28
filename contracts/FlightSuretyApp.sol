@@ -6,6 +6,11 @@ pragma solidity ^0.6.2;
 // More info: https://www.nccgroup.trust/us/about-us/newsroom-and-events/blog/2018/november/smart-contract-insecurity-bad-arithmetic/
 
 import "../node_modules/openzeppelin-solidity/contracts/math/SafeMath.sol";
+import "./FlightSuretyData.sol";
+
+
+
+
 
 /************************************************** */
 /* FlightSurety Smart Contract                      */
@@ -17,7 +22,12 @@ contract FlightSuretyApp {
   /*                                       DATA VARIABLES                                     */
   /********************************************************************************************/
 
-  // Flight status codees
+
+  address private contractOwner;          // Account used to deploy contract
+  address payable private _contractAddress;          // Account used to deploy contract
+
+
+  // Flight status codes
   uint8 private constant STATUS_CODE_UNKNOWN = 0;
   uint8 private constant STATUS_CODE_ON_TIME = 10;
   uint8 private constant STATUS_CODE_LATE_AIRLINE = 20;
@@ -25,18 +35,7 @@ contract FlightSuretyApp {
   uint8 private constant STATUS_CODE_LATE_TECHNICAL = 40;
   uint8 private constant STATUS_CODE_LATE_OTHER = 50;
 
-  address private contractOwner;          // Account used to deploy contract
 
-  struct Flight {
-    bool isRegistered;
-    uint8 statusCode;
-    uint256 updatedTimestamp;
-    address airline;
-  }
-
-  mapping(bytes32 => Flight) private flights;
-
-  bool private _isOperational = true;
 
   /********************************************************************************************/
   /*                                       FUNCTION MODIFIERS                                 */
@@ -53,7 +52,7 @@ contract FlightSuretyApp {
   modifier requireIsOperational()
   {
     // Modify to call data contract's status
-    require(_isOperational, "Contract is currently not operational");
+    require(true, "Contract is currently not operational");
     _;
     // All modifiers require an "_" which indicates where the function body will be added
   }
@@ -77,10 +76,15 @@ contract FlightSuretyApp {
   */
   constructor
   (
+    address payable dataContract
   )
   public
   {
-    contractOwner = msg.sender;
+
+    contractOwner = address(msg.sender);
+    _contractAddress = payable(address(this));
+    _flightSuretyData = FlightSuretyData(dataContract);
+    _flightSuretyData.registerAirline(contractOwner);
   }
 
   /********************************************************************************************/
@@ -92,8 +96,8 @@ contract FlightSuretyApp {
   view
   returns (bool)
   {
-    return _isOperational;
-    // Modify to call data contract's status
+    return _flightSuretyData.isOperational();
+    // TODO: Modify to call data contract's status
   }
 
   /********************************************************************************************/
@@ -107,12 +111,37 @@ contract FlightSuretyApp {
    */
   function registerAirline
   (
+    address newAirline
   )
   external
-  pure
+  requireRegisteredAirline(msg.sender)
+  requireAnte(msg.sender)
   returns (bool success, uint256 votes)
   {
-    return (success, 0);
+    // verify that caller has not already called this function
+    bool isDuplicate = false;
+    for (uint i = 0; i < _multiCalls.length; i++) {
+      if (_multiCalls[i] == msg.sender) {
+        isDuplicate = true;
+        break;
+      }
+    }
+    require(!isDuplicate, "Caller has already called this function!");
+
+    uint registeredVoterCount = _flightSuretyData.getAirlineCount().add(1);
+    _multiCalls.push(msg.sender);
+    uint voteCount = _multiCalls.length;
+
+    if (registeredVoterCount >= _MIN_AIRLINE_COUNT) {
+      uint reqConsensus = registeredVoterCount.div(2);
+      require(voteCount >= reqConsensus, "Required consensus not met!");
+    }
+
+
+    _multiCalls = new address[](0);
+    _flightSuretyData.registerAirline(newAirline);
+    return (true, voteCount);
+    //    return (success, 0);
   }
 
 
@@ -122,11 +151,13 @@ contract FlightSuretyApp {
    */
   function registerFlight
   (
+    address airline,
+    string memory flight,
+    uint256 updatedTimestamp
   )
-  external
-  pure
+  public
   {
-
+    _flightSuretyData.registerFlight(msg.sender, airline, flight, updatedTimestamp);
   }
 
   /**
@@ -141,8 +172,9 @@ contract FlightSuretyApp {
     uint8 statusCode
   )
   internal
-  pure
   {
+    require(statusCode == STATUS_CODE_LATE_AIRLINE, "Status does not warrant a credit.");
+    _flightSuretyData.creditInsurees(airline, flight, timestamp);
   }
 
 
@@ -154,6 +186,8 @@ contract FlightSuretyApp {
     uint256 timestamp
   )
   external
+  requireRegisteredAirline(msg.sender)
+  requireAnte(msg.sender)
   {
     uint8 index = getRandomIndex(msg.sender);
 
@@ -166,6 +200,14 @@ contract FlightSuretyApp {
 
     emit OracleRequest(index, airline, flight, timestamp);
   }
+
+
+
+
+
+
+
+
 
 
   // region ORACLE MANAGEMENT
@@ -211,6 +253,7 @@ contract FlightSuretyApp {
   // they fetch data and submit a response
   event OracleRequest(uint8 index, address airline, string flight, uint256 timestamp);
 
+  event PaidPassenger(address passenger, uint credit);
 
   // Register an oracle with the contract
   function registerOracle
@@ -223,6 +266,8 @@ contract FlightSuretyApp {
     require(msg.value >= REGISTRATION_FEE, "Registration fee is required");
 
     uint8[3] memory indexes = generateIndexes(msg.sender);
+
+    _contractAddress.transfer(msg.value);
 
     oracles[msg.sender] = Oracle({
     isRegistered : true,
@@ -263,7 +308,7 @@ contract FlightSuretyApp {
 
 
     bytes32 key = keccak256(abi.encodePacked(index, airline, flight, timestamp));
-    require(oracleResponses[key].isOpen, "Flight or timestamp do not match oracle request");
+    require(oracleResponses[key].isOpen, "Request is closed or invalid.");
 
     oracleResponses[key].responses[statusCode].push(msg.sender);
 
@@ -279,19 +324,6 @@ contract FlightSuretyApp {
     }
   }
 
-
-  function getFlightKey
-  (
-    address airline,
-    string memory flight,
-    uint256 timestamp
-  )
-  pure
-  internal
-  returns (bytes32)
-  {
-    return keccak256(abi.encodePacked(airline, flight, timestamp));
-  }
 
   // Returns array of three non-duplicating integers from 0-9
   function generateIndexes
@@ -340,4 +372,94 @@ contract FlightSuretyApp {
 
   // endregion
 
+
+  // ---------------------------------
+  IFlightSuretyData private _flightSuretyData;
+  uint8 private _MIN_AIRLINE_COUNT = 5;
+  address[] private _multiCalls = new address[](0);
+
+  modifier requireAnte (address airline) {
+    if (airline != contractOwner) {
+      require(_flightSuretyData.getAirlineFunds(airline) >= 10, "Airline needs at least 10 ether in funding!");
+    }
+    _;
+  }
+  modifier requireRegisteredAirline (address airline) {
+    require(_flightSuretyData.isAirline(airline), "Airline is not registered!");
+    _;
+  }
+
+  function fund(address airline) public payable {
+    fundContract(msg.value);
+
+    _flightSuretyData.fund(airline, msg.value);
+  }
+
+  function fundContract(uint value) public payable {
+    _contractAddress.transfer(value);
+  }
+
+  function buy
+  (
+    address airline,
+    string memory flightName,
+    uint256 timestamp
+  )
+  public
+  payable {
+    require(msg.value <= 1 ether, "Insurance cost cannot be more than 1 ether");
+    require(block.timestamp <= timestamp, "This flight has departed.  It can no longer be insured.");
+    require(!_flightSuretyData.isPersonInsured(msg.sender, airline, flightName, timestamp), "Passenger has already bought insurance.");
+
+    _flightSuretyData.buy(msg.sender, msg.value, airline, flightName, timestamp);
+
+    fundContract(msg.value);
+    _flightSuretyData.fund(airline, msg.value);
+  }
+
+  function pay
+  (
+    address airline,
+    string memory flightName,
+    uint256 timestamp
+  )
+  public
+  payable {
+
+    uint payout = _flightSuretyData.pay(msg.sender, airline, flightName, timestamp);
+
+    fundContract(payout);
+    emit PaidPassenger(msg.sender, payout);
+  }
+
+  /**
+  * @dev Fallback function for funding smart contract.
+  *
+  */
+  fallback()
+  external
+  payable
+  {
+    //    fund();
+  }
+
+  receive()
+  external
+  payable
+  {
+    //    _contractAddress.transfer(msg.value);
+  }
+
+
+
+
+  //  modifier requireConsensus () {
+  //    uint newCount = _flightSuretyData.getAirlineCount().add(1);
+  //
+  //    if (newCount >= _MIN_AIRLINE_COUNT) {
+  //      uint reqConsensus = newCount.div(2);
+  //      require(_consensus.length >= reqConsensus, "Required consensus not met!");
+  //    }
+  //    _;
+  //  }
 }   

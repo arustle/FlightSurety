@@ -7,6 +7,7 @@ import './flightsurety.css';
 
   let result = null;
 
+
   let contract = new Contract('localhost', () => {
 
     // Read transaction
@@ -22,20 +23,93 @@ import './flightsurety.css';
 
     // User-submitted transaction
     DOM.elid('submit-oracle').addEventListener('click', () => {
-      let flight = DOM.elid('flight-number').value;
+      const flightId = DOM.elid('flight-select').value;
       // Write transaction
-      contract.fetchFlightStatus(flight, (error, result) => {
+      contract.fetchFlightStatus(flightId, (error, result, payload) => {
         display('Oracles', 'Trigger oracles', [{
           label: 'Fetch Flight Status',
           error: error,
-          value: result.flight + ' ' + result.timestamp
+          value: payload.flight + ' ' + payload.timestamp
         }]);
       });
     })
 
+
+    DOM.elid('buy-insurance').addEventListener('click', () => {
+      const flightId = DOM.elid('flight-select').value;
+      const insuranceCost = DOM.elid('insurance-cost').value;
+
+      contract.buyInsurance(flightId, insuranceCost, (error, result) => {
+        display('Contract', 'Buy Insurance', [{
+          label: 'Bought Insurance',
+          error: error,
+          value: result
+        }]);
+      });
+    });
+
+
+    DOM.elid('withdraw-insurance-payout').addEventListener('click', () => {
+      const flightId = DOM.elid('flight-select').value;
+
+
+      contract.withdraw(flightId, (error, result) => {
+        console.log('withdraw-insurance-payout', error, result)
+        display('Contract', 'Withdraw payout', [{
+          label: 'Withdraw payout',
+          error: error,
+          value: result
+        }]);
+      });
+    });
+
+
+    contract.flightSuretyApp.events.FlightStatusInfo({
+      fromBlock: 0
+    }, function (error, result) {
+      console.log("FlightStatusInfo");
+      if (error) {
+        console.log(error)
+      } else {
+        console.log("[----- FlightStatusInfo", result);
+      }
+    });
+
+    contract.flightSuretyApp.events.PaidPassenger({
+      fromBlock: 0
+    }, function (error, result) {
+      console.log("PaidPassenger", error, result);
+      display('Passenger', 'PaidPassenger', [{
+        label: 'PaidPassenger',
+        error: error,
+        value: result
+      }]);
+    });
+
   });
 
 
+  fetch('http://localhost:3000/flights', {
+    method: 'GET',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+  })
+    .then(res => (res.json()))
+    .then((res) => {
+      contract.flights = res.flights.map(x => (Object.assign({}, x, {
+        timestamp: new Date(x.timestamp)
+      })));
+      const flightSelector = document.getElementById('flight-select');
+
+      contract.flights.forEach(flight => {
+        const option = document.createElement('option');
+        option.value = flight.id;
+        option.text = `${flight.flight} @ ${flight.timestamp.toUTCString()}`;
+
+        flightSelector.add(option);
+      });
+    })
 })();
 
 
